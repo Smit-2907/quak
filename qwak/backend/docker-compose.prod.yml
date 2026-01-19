@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  # Redis cache service
+  redis:
+    image: redis:7-alpine
+    container_name: qwak-redis-prod
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - qwak-network
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # Backend API service
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: qwak-backend-prod
+    ports:
+      - "8000:8000"
+    environment:
+      - QWAK_DEBUG=false
+      - QWAK_ENABLE_REDIS_CACHE=true
+      - QWAK_REDIS_HOST=redis
+      - QWAK_REDIS_PORT=6379
+      - QWAK_PRELOAD_MODELS=true
+      - QWAK_ENABLE_CACHING=true
+      - QWAK_MAX_CONCURRENT_REQUESTS=50
+      - QWAK_REQUEST_TIMEOUT=30
+      - QWAK_CACHE_TTL=3600
+    volumes:
+      # Mount models directory (read-only in production)
+      - ./models:/app/models:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 120s
+    networks:
+      - qwak-network
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  qwak-network:
+    driver: bridge
